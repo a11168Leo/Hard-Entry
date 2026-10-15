@@ -1,0 +1,20 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5660a6018efc16545bcf51401525a6b8, type: 3}
+  m_Name: GripData_M1911
+  m_EditorClassIdentifier: Assembly-CSharp::HardEntry.Weapons.GunGripData
+  hasRight: 1
+  hasLeft: 1
+  rightPos: {x: -0.01746765, y: -0.067169026, z: 0.09572579}
+  leftPos: {x: 0.030399974, y: -0.057735056, z: 0.09618515}
+  rightRot: {x: -0.122664675, y: -0.23351938, z: -0.519143, w: -0.8129654}
+  leftRot: {x: -0.25338408, y: 0.15269867, z: 0.10337572, w: -0.94962794}
