@@ -33,6 +33,23 @@ namespace HardEntry.Weapons
         bool _prevButton;
         float _snapT;
 
+        // Recuo (aplicado por cima da pegada)
+        Vector3 _recoilPos, _recoilRot;
+        [Tooltip("Velocidade com que a arma volta à posição depois do recuo.")]
+        public float recoilReturn = 14f;
+
+        /// <summary>A arma está a ser segurada?</summary>
+        public bool IsHeld => IsGrabbed && _holder != null;
+        /// <summary>A mão que segura é a direita?</summary>
+        public bool HeldByRight => _holderIsRight;
+
+        /// <summary>Adiciona recuo: posição (m, no espaço da arma) e rotação (graus).</summary>
+        public void AddRecoil(Vector3 pos, Vector3 rotEuler)
+        {
+            _recoilPos += pos;
+            _recoilRot += rotEuler;
+        }
+
         void Awake()
         {
             _rb = GetComponent<Rigidbody>();
@@ -95,6 +112,13 @@ namespace HardEntry.Weapons
             gripData.Get(_holderIsRight, out var lp, out var lr);
             Vector3 targetPos = _holder.TransformPoint(lp);
             Quaternion targetRot = _holder.rotation * lr;
+
+            // recuo
+            float k = 1f - Mathf.Exp(-recoilReturn * Time.deltaTime);
+            _recoilPos = Vector3.Lerp(_recoilPos, Vector3.zero, k);
+            _recoilRot = Vector3.Lerp(_recoilRot, Vector3.zero, k);
+            targetPos += targetRot * _recoilPos;
+            targetRot = targetRot * Quaternion.Euler(_recoilRot);
 
             if (snapSmoothing > 0f && _snapT < 1f)
             {
