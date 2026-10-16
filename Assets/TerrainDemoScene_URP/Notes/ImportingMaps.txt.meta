@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: e74ebe44c912f624a955529fbd5a4ef2
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 213198
+  packageName: Unity HDRP Terrain | Terrain Sample Project
+  packageVersion: 1.1.0
+  assetPath: Assets/TerrainDemoScene_URP/Notes/ImportingMaps.txt
+  uploadId: 993772

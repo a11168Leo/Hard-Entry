@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 27599f4c36b3be745a2464b37650d7af
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 2100000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 213198
+  packageName: Unity HDRP Terrain | Terrain Sample Project
+  packageVersion: 1.1.0
+  assetPath: Assets/TerrainDemoScene_URP/Prefabs/Trees/Pines/Pine_D/Materials/Pine_D_Billboard_LOD3.mat
+  uploadId: 993772
