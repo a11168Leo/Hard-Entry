@@ -418,6 +418,8 @@ namespace HardEntry.Weapons
                 if (h.rigidbody != null && !h.rigidbody.isKinematic)
                     h.rigidbody.AddForceAtPosition(dir * impactForce, h.point, ForceMode.Impulse);
                 SpawnImpact(h.point, h.normal, h.collider.transform);
+                var shootable = h.collider.GetComponentInParent<IShootable>();
+                if (shootable != null) shootable.OnShot(h.point, h.normal, dir);
                 break;
             }
         }
