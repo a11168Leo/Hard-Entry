@@ -24,7 +24,8 @@ namespace HardEntry.EditorTools
                 AssetDatabase.SaveAssets();
             }
 
-            var snap = gun.GetComponent<GunGripSnap>() ?? Undo.AddComponent<GunGripSnap>(gun);
+            var snap = gun.GetComponent<GunGripSnap>();
+            if (snap == null) snap = Undo.AddComponent<GunGripSnap>(gun);
             snap.gripData = data;
             EditorUtility.SetDirty(snap);
             UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(gun.scene);
