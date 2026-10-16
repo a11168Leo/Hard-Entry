@@ -116,3 +116,6 @@ InitTestScene*.unity*
 # ===== Hard Entry (extra) =====
 .vscode/
 /Blender/*.blend1
+
+# Fotos de debug da pegada (editor)
+/Capturas/

@@ -8,14 +8,20 @@ namespace HardEntry.Weapons
     /// Lógica da pistola (G17):
     ///  - Gatilho do comando  -> dispara (semi-automática)
     ///  - Botão A / X         -> carrega no botão do carregador e o carregador cai
-    ///                           (TEMPORÁRIO: sem carregador, A / X mete um novo)
+    ///  - Recarregar           -> tira um carregador do colete com a outra mão e enfia-o no punho
+    ///  - Botão B / Y          -> solta a corrediça trancada atrás (retém)
+    ///  - Outra mão na corrediça + grip -> puxa a corrediça atrás (municia / tira bala)
     /// Encontra as peças pelo nome: Corredica, Gatilho, BotaoCarregador, Carregador,
     /// BalaCamara, PontaCano, SaidaCapsula, EncaixeCarregador.
     /// Coloca no objeto raiz da arma (o mesmo do GunGripSnap).
     /// </summary>
     [RequireComponent(typeof(GunGripSnap))]
-    public class PistolController : MonoBehaviour
+    public class PistolController : MonoBehaviour, IMagazineWell
     {
+        [Header("Arma")]
+        [Tooltip("Identificador dos carregadores desta arma (as bolsas do colete usam o mesmo).")]
+        public string weaponId = "G17";
+
         [Header("Munição")]
         public int magCapacity = 17;
         public int magAmmo = 17;
@@ -31,6 +37,9 @@ namespace HardEntry.Weapons
         [Header("Corrediça")]
         public float slideTravel = 0.028f;
         public float slideCycleTime = 0.07f;
+
+        [Tooltip("Distância da palma à traseira da corrediça para a conseguir puxar (m).")]
+        public float rackReach = 0.07f;
 
         [Header("Recuo")]
         public Vector3 recoilKickPos = new Vector3(0f, 0.004f, -0.025f);
@@ -60,7 +69,14 @@ namespace HardEntry.Weapons
         Collider[] _gunColliders;
 
         bool _slideLocked;
-        bool _prevTrigger, _prevA;
+        bool _prevTrigger, _prevA, _prevB;
+        Vector3 _slideRearLocal;
+        Vector3 _magUpLocalGun, _magFwdLocalGun;   // eixo do carregador no espaço da arma
+        float _wellDepthLocal = 0.1f;              // quanto o carregador entra (espaço da arma)
+        // puxar a corrediça com a outra mão
+        bool _racking, _rackHandRight, _rackReachedBack, _rackWasLocked;
+        Vector3 _rackStartHand; float _rackStartOffset;
+        readonly bool[] _prevOffGrip = new bool[2];
         float _triggerValue;
         Coroutine _slideRoutine;
 
@@ -76,7 +92,24 @@ namespace HardEntry.Weapons
             _ejectPort = Find("SaidaCapsula");
             _magSocket = Find("EncaixeCarregador");
 
-            if (_slide) _slideRest = _slide.localPosition;
+            if (_slide)
+            {
+                _slideRest = _slide.localPosition;
+                var sr = _slide.GetComponentInChildren<Renderer>();
+                if (sr)
+                {
+                    // ponto mais atrás da corrediça (onde se agarra para a puxar)
+                    Vector3 c = transform.InverseTransformPoint(sr.bounds.center);
+                    float minZ = float.MaxValue;
+                    var b = sr.bounds;
+                    for (int i = 0; i < 8; i++)
+                    {
+                        var corner = new Vector3((i & 1) == 0 ? b.min.x : b.max.x, (i & 2) == 0 ? b.min.y : b.max.y, (i & 4) == 0 ? b.min.z : b.max.z);
+                        minZ = Mathf.Min(minZ, transform.InverseTransformPoint(corner).z);
+                    }
+                    _slideRearLocal = new Vector3(c.x, c.y, minZ + 0.01f);
+                }
+            }
             if (_magButton) _magButtonRest = _magButton.localPosition;
             if (_trigger)
             {
@@ -92,6 +125,31 @@ namespace HardEntry.Weapons
                 _magTemplate.SetActive(false);
                 _magTemplate.transform.SetParent(transform, false);
                 _magTemplate.hideFlags = HideFlags.HideInHierarchy;
+
+                // eixo do carregador (do centro para o encaixe) e frente, no espaço da arma
+                var mr = _mag.GetComponentInChildren<Renderer>();
+                Vector3 centerGun = transform.InverseTransformPoint(mr ? mr.bounds.center : _mag.position);
+                Vector3 topGun = _magSocket ? transform.InverseTransformPoint(_magSocket.position) : _magRestPos;
+                _magUpLocalGun = (topGun - centerGun).normalized;
+                _magFwdLocalGun = Vector3.ProjectOnPlane(Vector3.forward, _magUpLocalGun).normalized;
+                // profundidade do poço: do encaixe até ao fundo do carregador (ao longo do eixo)
+                _wellDepthLocal = 0.1f;
+                if (mr)
+                {
+                    var bb = mr.bounds; float deepest = 0f;
+                    for (int i = 0; i < 8; i++)
+                    {
+                        var corner = new Vector3((i & 1) == 0 ? bb.min.x : bb.max.x, (i & 2) == 0 ? bb.min.y : bb.max.y, (i & 4) == 0 ? bb.min.z : bb.max.z);
+                        deepest = Mathf.Max(deepest, Vector3.Dot(topGun - transform.InverseTransformPoint(corner), _magUpLocalGun));
+                    }
+                    if (deepest > 0.02f) _wellDepthLocal = deepest;
+                }
+                // mesmos vetores no espaço do próprio carregador
+                Quaternion inv = Quaternion.Inverse(_magRestRot);
+                Vector3 s = _mag.localScale;
+                Vector3 topMag = inv * (topGun - _magRestPos);
+                topMag = new Vector3(topMag.x / s.x, topMag.y / s.y, topMag.z / s.z);
+                MagazineFactory.Register(weaponId, _magTemplate, magCapacity, topMag, inv * _magUpLocalGun, inv * _magFwdLocalGun);
             }
             if (_chamberRound)
             {
@@ -125,6 +183,15 @@ namespace HardEntry.Weapons
             _gunColliders = GetComponentsInChildren<Collider>();
             UpdateChamberVisual();
 
+            // só uma mão pode agarrar a arma (a outra fica livre para recarregar / puxar a corrediça)
+            var grab = GetComponent<Oculus.Interaction.Grabbable>();
+            if (grab != null)
+            {
+                var f = typeof(Oculus.Interaction.Grabbable).GetField("_maxGrabPoints",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (f != null) f.SetValue(grab, 1);
+            }
+
             foreach (var n in new[] { "Corredica", "Gatilho", "BotaoCarregador", "Carregador", "BalaCamara", "PontaCano", "SaidaCapsula" })
                 if (Find(n) == null) Debug.LogWarning($"[Pistola] Peça não encontrada: {n}");
         }
@@ -140,7 +207,8 @@ namespace HardEntry.Weapons
         {
             if (!_grip.IsHeld)
             {
-                _prevTrigger = false; _prevA = false;
+                if (_racking) EndRack();
+                _prevTrigger = false; _prevA = false; _prevB = false;
                 AnimateTrigger(0f);
                 return;
             }
@@ -163,6 +231,133 @@ namespace HardEntry.Weapons
 
             if (a && !_prevA) MagButton();
             _prevA = a;
+
+            // B / Y: retém da corrediça (solta a corrediça trancada)
+            bool b = false;
+            if (dev.isValid) dev.TryGetFeatureValue(CommonUsages.secondaryButton, out b);
+            if (b && !_prevB && _slideLocked && _mag != null && !_racking) ReleaseSlide();
+            _prevB = b;
+
+            UpdateRack();
+        }
+
+        void OnEnable() { if (!MagazineFactory.Wells.Contains(this)) MagazineFactory.Wells.Add(this); }
+        void OnDisable() { MagazineFactory.Wells.Remove(this); }
+
+        // ---------------- IMagazineWell ----------------
+        public string WeaponId => weaponId;
+        public bool HasMagazine => _mag != null;
+        public Transform Socket => _magSocket;
+        public Vector3 MagUpWorld => transform.TransformDirection(_magUpLocalGun);
+        public Vector3 MagForwardWorld => transform.TransformDirection(_magFwdLocalGun);
+        public float WellDepth => _wellDepthLocal * transform.lossyScale.y;
+
+        public void InsertMagazine(Magazine m)
+        {
+            _mag = m.transform;
+            _mag.SetParent(transform, true);
+            magAmmo = m.ammo;
+            _mag.gameObject.name = "Carregador";
+            StartCoroutine(SeatMag(_mag));
+            Play(magInSound, 1f);
+            // sem colisões entre o carregador e a arma enquanto entra
+            foreach (var c in _mag.GetComponentsInChildren<Collider>())
+                foreach (var gc in _gunColliders) if (gc && gc != c) Physics.IgnoreCollision(c, gc, true);
+        }
+
+        IEnumerator SeatMag(Transform mag)
+        {
+            Vector3 p0 = mag.localPosition; Quaternion r0 = mag.localRotation;
+            float t = 0f, d = 0.06f;
+            while (t < d && mag != null && mag.parent == transform)
+            {
+                t += Time.deltaTime;
+                mag.localPosition = Vector3.Lerp(p0, _magRestPos, t / d);
+                mag.localRotation = Quaternion.Slerp(r0, _magRestRot, t / d);
+                yield return null;
+            }
+            if (mag != null && mag.parent == transform) { mag.localPosition = _magRestPos; mag.localRotation = _magRestRot; }
+        }
+
+        void MarkInserted()
+        {
+            if (_mag == null) return;
+            var m = _mag.GetComponent<Magazine>();
+            if (m != null) { m.enabled = false; }
+            var rb = _mag.GetComponent<Rigidbody>(); if (rb) Destroy(rb);
+        }
+
+        // ---------------- PUXAR A CORREDIÇA (outra mão) ----------------
+        void UpdateRack()
+        {
+            if (_slide == null) return;
+            bool holder = _grip.HeldByRight;
+            bool off = !holder;
+            int oi = off ? 1 : 0;
+            bool grip = HandRig.Grip(off) > 0.6f;
+            bool down = grip && !_prevOffGrip[oi];
+            _prevOffGrip[oi] = grip;
+            var palm = HandRig.Palm(off);
+            if (palm == null) return;
+
+            if (!_racking)
+            {
+                if (!down || HandRig.HeldBy(off) != null) return;
+                Vector3 rear = transform.TransformPoint(_slideRearLocal);
+                if (Vector3.Distance(palm.position, rear) > rackReach) return;
+                _racking = true;
+                _rackHandRight = off;
+                _rackStartHand = palm.position;
+                _rackWasLocked = _slideLocked;
+                _rackStartOffset = Vector3.Dot(_slideRest - _slide.localPosition, Vector3.forward); // 0 = à frente
+                _rackReachedBack = false;
+                if (_slideRoutine != null) { StopCoroutine(_slideRoutine); _slideRoutine = null; }
+                HandRig.SetHeld(off, this);
+                HandRig.Buzz(off, 0.3f, 0.03f);
+                return;
+            }
+
+            if (!grip)
+            {
+                EndRack();
+                return;
+            }
+
+            float pull = _rackStartOffset + Vector3.Dot(palm.position - _rackStartHand, -transform.forward);
+            pull = Mathf.Clamp(pull, 0f, slideTravel);
+            _slide.localPosition = _slideRest + Vector3.back * pull;
+            if (!_rackReachedBack && pull >= slideTravel * 0.9f)
+            {
+                _rackReachedBack = true;
+                // a bala que estava na câmara salta fora
+                if (roundChambered) { roundChambered = false; EjectCasing(); UpdateChamberVisual(); }
+                HandRig.Buzz(off, 0.5f, 0.04f);
+            }
+        }
+
+        void EndRack()
+        {
+            _racking = false;
+            HandRig.SetHeld(_rackHandRight, null);
+            bool pulledFromLock = _rackWasLocked && Vector3.Dot(_slideRest - _slide.localPosition, Vector3.forward) < slideTravel * 0.98f;
+            if (_rackReachedBack || pulledFromLock || _slideLocked)
+            {
+                // carregador vazio: o retém tranca a corrediça atrás
+                if (_mag != null && magAmmo <= 0 && _rackReachedBack)
+                {
+                    _slide.localPosition = _slideRest + Vector3.back * slideTravel;
+                    _slideLocked = true;
+                    return;
+                }
+                _slideLocked = true; // ReleaseSlide municia e manda a corrediça à frente
+                ReleaseSlide();
+            }
+            else
+            {
+                // largou a meio: volta à frente sem mexer na câmara
+                if (_slideRoutine != null) StopCoroutine(_slideRoutine);
+                _slideRoutine = StartCoroutine(SlideForward());
+            }
         }
 
         void AnimateTrigger(float v)
@@ -289,7 +484,7 @@ namespace HardEntry.Weapons
         {
             if (!_slideLocked || _slide == null) return;
             _slideLocked = false;
-            if (_mag != null && magAmmo > 0) { magAmmo--; roundChambered = true; }
+            if (!roundChambered && _mag != null && magAmmo > 0) { magAmmo--; roundChambered = true; }
             UpdateChamberVisual();
             Play(slideReleaseSound, 1f);
             if (_slideRoutine != null) StopCoroutine(_slideRoutine);
@@ -308,7 +503,6 @@ namespace HardEntry.Weapons
         {
             StartCoroutine(PressButton());
             if (_mag != null && _mag.parent == transform) EjectMag();
-            else InsertNewMag();  // TEMPORÁRIO até termos a recarga manual
         }
 
         IEnumerator PressButton()
@@ -325,22 +519,16 @@ namespace HardEntry.Weapons
         void EjectMag()
         {
             var mag = _mag;
-            Vector3 dropDir = (_magSocket != null)
-                ? (mag.GetComponentInChildren<Renderer>().bounds.center - _magSocket.position).normalized
-                : -transform.up;
+            Vector3 dropDir = -MagUpWorld;
             mag.SetParent(null, true);
-            var col = mag.GetComponentInChildren<Collider>();
-            var rb = mag.gameObject.AddComponent<Rigidbody>();
-            rb.mass = 0.25f;
-            rb.interpolation = RigidbodyInterpolation.Interpolate;
-            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            var loose = MagazineFactory.MakeLoose(weaponId, mag.gameObject, magAmmo); // as balas ficam no carregador
+            if (loose != null) loose.OnEjected();
+            var rb = mag.GetComponent<Rigidbody>();
             var parentRb = GetComponent<Rigidbody>();
-            rb.linearVelocity = dropDir * 1.2f + (parentRb ? parentRb.linearVelocity : Vector3.zero);
-            if (col) StartCoroutine(IgnoreForAWhile(col, 0.4f));
+            if (rb) rb.linearVelocity = dropDir * 1.2f + (parentRb ? parentRb.linearVelocity : Vector3.zero);
+            foreach (var col in mag.GetComponentsInChildren<Collider>()) StartCoroutine(IgnoreForAWhile(col, 0.6f));
             mag.gameObject.name = "Carregador_Ejetado";
-            Destroy(mag.gameObject, 30f);
             _mag = null;
-            // as balas iam no carregador; a da câmara fica
             magAmmo = 0;
             Play(magOutSound, 1f);
         }
@@ -350,22 +538,6 @@ namespace HardEntry.Weapons
             foreach (var gc in _gunColliders) if (gc && gc != c) Physics.IgnoreCollision(c, gc, true);
             yield return new WaitForSeconds(time);
             foreach (var gc in _gunColliders) if (gc && c && gc != c) Physics.IgnoreCollision(c, gc, false);
-        }
-
-        void InsertNewMag()
-        {
-            if (_magTemplate == null) return;
-            var m = Instantiate(_magTemplate, transform);
-            m.hideFlags = HideFlags.None;
-            m.name = "Carregador";
-            m.transform.localPosition = _magRestPos;
-            m.transform.localRotation = _magRestRot;
-            m.SetActive(true);
-            _mag = m.transform;
-            magAmmo = magCapacity;
-            Play(magInSound, 1f);
-            // como numa Glock real (slingshot simplificado): se a corrediça estava presa, solta
-            if (_slideLocked) ReleaseSlide();
         }
 
         void UpdateChamberVisual()

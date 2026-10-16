@@ -14,7 +14,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::HardEntry.Weapons.GunGripData
   hasRight: 1
   hasLeft: 1
-  rightPos: {x: 0.037574563, y: -0.06691273, z: 0.14271247}
+  rightPos: {x: 0.15628348, y: -0.06270659, z: 0.0693631}
   leftPos: {x: -0.050502457, y: -0.077335134, z: 0.10942001}
-  rightRot: {x: -0.09897727, y: -0.101361595, z: -0.54920554, w: -0.82359135}
+  rightRot: {x: -0.6511176, y: 0.2338685, z: -0.59082294, w: -0.41506594}
   leftRot: {x: -0.32526508, y: 0.07457871, z: 0.5767913, w: -0.7456223}

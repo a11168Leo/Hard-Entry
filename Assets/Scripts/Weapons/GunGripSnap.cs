@@ -42,6 +42,37 @@ namespace HardEntry.Weapons
         public bool IsHeld => IsGrabbed && _holder != null;
         /// <summary>A mão que segura é a direita?</summary>
         public bool HeldByRight => _holderIsRight;
+        /// <summary>Pulso (XRHand_Wrist) da mão que segura.</summary>
+        public Transform HolderWrist => _holder;
+        /// <summary>A arma já terminou o "salto" para a mão?</summary>
+        public bool SnapSettled => IsHeld && (_snapT >= 1f || !HasTarget);
+        bool HasTarget => (autoGrip && _hasAuto) || (gripData != null && gripData.Has(_holderIsRight));
+        /// <summary>Chamado depois de gravar uma pegada com B/Y.</summary>
+        public event System.Action Calibrated;
+
+        [Tooltip("Adiciona automaticamente a pose dos dedos (GunHandPose) se não existir.")]
+        public bool autoHandPose = true;
+
+        [Header("Pegada automática")]
+        [Tooltip("Calcula a posição da arma a partir da forma da mão (punho na palma, cano para a frente). " +
+                 "Se carregares em B/Y grava a tua pegada e passa a usar essa.")]
+        public bool autoGrip = true;
+        [Tooltip("Distância do centro da palma ao centro do punho (m).")]
+        public float autoPalmOffset = 0.028f;
+        [Tooltip("Sobe (+) ou desce (-) a arma na mão (m).")]
+        public float autoHeight = 0f;
+        [Tooltip("Avança (+) ou recua (-) a arma na mão (m).")]
+        public float autoForward = 0f;
+        [Tooltip("Inclinação extra do cano para cima (+) / baixo (-), em graus.")]
+        public float autoPitch = 0f;
+        [Tooltip("Nome da peça que fica dentro do punho (usada para achar o centro do punho).")]
+        public string gripPartName = "Carregador";
+        [Tooltip("Nome do gatilho (a altura da mão alinha o indicador com ele).")]
+        public string triggerPartName = "Gatilho";
+
+        Vector3 _gripLocal, _triggerLocal;   // no espaço da arma
+        bool _hasAuto;
+        Vector3 _autoPos; Quaternion _autoRot; // no espaço do pulso
 
         /// <summary>Adiciona recuo: posição (m, no espaço da arma) e rotação (graus).</summary>
         public void AddRecoil(Vector3 pos, Vector3 rotEuler)
@@ -50,9 +81,47 @@ namespace HardEntry.Weapons
             _recoilRot += rotEuler;
         }
 
+        /// <summary>Todas as armas com pegada na cena.</summary>
+        public static readonly System.Collections.Generic.List<GunGripSnap> All = new System.Collections.Generic.List<GunGripSnap>();
+        void OnEnable() { if (!All.Contains(this)) All.Add(this); }
+        void OnDisable() { All.Remove(this); }
+
         void Awake()
         {
             _rb = GetComponent<Rigidbody>();
+            if (autoHandPose && GetComponent<GunHandPose>() == null) gameObject.AddComponent<GunHandPose>();
+
+            // pontos de referência no espaço da arma (guardados agora, antes de o carregador poder sair)
+            _gripLocal = new Vector3(0f, 0.05f, 0f);
+            _triggerLocal = new Vector3(0f, 0.09f, 0.04f);
+            foreach (var r in GetComponentsInChildren<Renderer>(true))
+            {
+                if (r.name == gripPartName) _gripLocal = transform.InverseTransformPoint(r.bounds.center);
+                else if (r.name == triggerPartName) _triggerLocal = transform.InverseTransformPoint(r.bounds.center);
+            }
+        }
+
+        /// <summary>Calcula onde a arma fica na mão a partir da forma da mão.</summary>
+        bool ComputeAutoGrip()
+        {
+            Vector3 pos; Quaternion rot;
+            var hp = GetComponent<GunHandPose>();
+            if (hp == null || !hp.ComputeGunPose(_holder, _holderIsRight, out pos, out rot))
+            {
+                // sem pose desenhada: estimativa simples a partir da forma da mão
+                var j = HandGeo.FindJoints(_holder);
+                if (!HandGeo.Frame(j, _holderIsRight, out var palm, out var across, out var fwd, out var normal)) return false;
+                rot = Quaternion.LookRotation(fwd, across);
+                pos = palm + normal * autoPalmOffset - rot * _gripLocal;
+            }
+
+            // afinações (no espaço da arma)
+            if (autoPitch != 0f) rot = rot * Quaternion.Euler(-autoPitch, 0f, 0f);
+            pos += rot * new Vector3(0f, autoHeight, autoForward);
+
+            _autoPos = _holder.InverseTransformPoint(pos);
+            _autoRot = Quaternion.Inverse(_holder.rotation) * rot;
+            return true;
         }
 
         void Start()
@@ -93,12 +162,13 @@ namespace HardEntry.Weapons
                 _holderIsRight = dR <= dL;
                 _holder = _holderIsRight ? _rightWrist : _leftWrist;
                 _snapT = 0f;
+                _hasAuto = autoGrip && _holder != null && ComputeAutoGrip();
             }
             _wasGrabbed = grabbed;
             if (!grabbed || _holder == null) return;
 
             // Calibração: B (direita) / Y (esquerda) = botão secundário
-            if (allowCalibration && gripData != null)
+            if (allowCalibration && !autoGrip && gripData != null)
             {
                 var dev = InputDevices.GetDeviceAtXRNode(_holderIsRight ? XRNode.RightHand : XRNode.LeftHand);
                 bool pressed = false;
@@ -107,9 +177,11 @@ namespace HardEntry.Weapons
                 _prevButton = pressed;
             }
 
-            // Encaixar na posição gravada
-            if (gripData == null || !gripData.Has(_holderIsRight)) return;
-            gripData.Get(_holderIsRight, out var lp, out var lr);
+            // Encaixar: pegada automática ou a gravada
+            Vector3 lp; Quaternion lr;
+            if (autoGrip && _hasAuto) { lp = _autoPos; lr = _autoRot; }
+            else if (gripData != null && gripData.Has(_holderIsRight)) gripData.Get(_holderIsRight, out lp, out lr);
+            else return;
             Vector3 targetPos = _holder.TransformPoint(lp);
             Quaternion targetRot = _holder.rotation * lr;
 
@@ -145,9 +217,11 @@ namespace HardEntry.Weapons
             UnityEditor.AssetDatabase.SaveAssetIfDirty(gripData);
 #endif
             Debug.Log($"[GunGrip] Pegada {(_holderIsRight ? "DIREITA" : "ESQUERDA")} gravada: pos {lp}, rot {lr.eulerAngles}");
+            if (autoGrip) { autoGrip = false; Debug.Log("[GunGrip] A partir de agora usa a pegada gravada. Para voltar à automática, marca 'Auto Grip'."); }
             // Vibração curta para confirmar
             var dev = InputDevices.GetDeviceAtXRNode(_holderIsRight ? XRNode.RightHand : XRNode.LeftHand);
             if (dev.isValid) dev.SendHapticImpulse(0, 0.6f, 0.15f);
+            Calibrated?.Invoke();
         }
     }
 }
