@@ -119,3 +119,9 @@ InitTestScene*.unity*
 
 # Fotos de debug da pegada (editor)
 /Capturas/
+
+# Demo de terreno da Unity (4,6 GB, para PC): não vai para o GitHub
+/[Aa]ssets/TerrainDemoScene_URP/
+/[Aa]ssets/TerrainDemoScene_URP.meta
+/[Aa]ssets/TerrainDemoScene_HDRP/
+/[Aa]ssets/TerrainDemoScene_HDRP.meta
